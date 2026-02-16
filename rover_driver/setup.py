@@ -24,6 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            # EKSİK OLAN KISIM
+            'driver_node = rover_driver.driver_node:main',
         ],
     },
 )
