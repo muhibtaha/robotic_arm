@@ -7,6 +7,10 @@ class RoverTeleop(Node):
     def __init__(self):
         super().__init__('rover_teleop_node')
 
+        # En son gonderilecek komutlari burada saklayacagiz
+        # [SolTeker, SagTeker, Omuz, Dirsek, Bilek, Kiskac, Yedek]
+        self.last_commands = [0.0] * 7
+
         # 1. GİRİŞ: Joystick'i dinle (/joy konusuna abone ol)
         # ROS'un "joy" paketi joystick verisini buraya atacak.
         self.subscription = self.create_subscription(
@@ -20,6 +24,11 @@ class RoverTeleop(Node):
             Float32MultiArray,
             'motor_komutlari',
             10)
+
+        # --- TIMER ---
+        # Joystick'e dokunmasan bile surucunun baglantiyi koparmamasi icin
+        # saniyede 10 kere (0.1s) son komutu tekrar tekrar gonderiyoruz.
+        self.timer = self.create_timer(0.1, self.timer_callback)
 
         self.get_logger().info("OPERATOR HAZIR! Joystick verisi bekleniyor...")
 
@@ -75,8 +84,17 @@ class RoverTeleop(Node):
         elif msg.buttons[7] == 1:
             emirler.data[5] = 30000.0
 
+        # Hafizayi güncelle.
+        self.last_commands = emirler.data
         # --- C. Listeyi Yayınla (Kargoyu Gönder) ---
         self.publisher_.publish(emirler)
+    
+    # Saniyede 10 kere calisir ve son durumu Driver'a bildirir.
+    # Bu sayede Driver'in Watchdog'u (Güvenlik kilidi) devreye girmez.
+    def timer_callback(self):
+        msg = Float32MultiArray()
+        msg.data = self.last_commands
+        self.publisher_.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)

@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 from .roboclaw_3 import Roboclaw
+import time # ZAMAN TAKIBI ICIN EKLENDI
 
 class RoverDriver(Node):
     def __init__(self):
@@ -42,6 +43,12 @@ class RoverDriver(Node):
         # RAMP ADIMI: Her 0.05 saniyede hizi 2000 arttirdim. Daha yumusak istersek (1000), daha seri istersek (4000) yapabiliriz. Deneyince güncellenecek!
         self.RAMP_STEP = 2000.0
 
+        # --- 5. GUVENLIK (WATCHDOG) ---
+        # En son ne zaman veri geldi?
+        self.last_msg_time = time.time()
+        # 0.5 saniye veri gelmezse robotu durdur
+        self.TIMEOUT_SEC = 0.5
+
         # Saniyede 20 kere (0.05s) control_loop fonksiyonunu calistir
         self.timer = self.create_timer(0.05, self.control_loop)
         self.get_logger().info("Driver Ready. Soft Start (Ramping) Active.")
@@ -70,6 +77,19 @@ class RoverDriver(Node):
 
     # Bu fonksiyon surekli calisir ve hizi hedefe dogru YAVASCA yaklastirir.
     def control_loop(self):
+        # --- GUVENLIK KONTROLU (TIMEOUT) ---
+        elapsed_time = time.time() - self.last_msg_time
+
+        # Eger 0.5 saniyeden uzun suredir veri gelmiyorsa:
+        if elapsed_time > self.TIMEOUT_SEC:
+            # Hedefleri SIFIRLA (Robotu durmaya zorla)
+            self.targets = [0.0] * 7
+            
+            # Surekli log basmasin diye saniyede bir uyar
+            if int(elapsed_time) % 2 == 0: 
+                self.get_logger().warn(f"⚠️ SIGNAL LOST! Stopping motors... ({elapsed_time:.1f}s)", throttle_duration_sec=1.0)
+        
+        # --- RAMPALAMA ISLEMI ---
         # Sadece Kol Motorlari ile ilgileniyoruz (Index 2, 3, 4, 5)
         for i in range(2, 6):
             target = self.targets[i]
