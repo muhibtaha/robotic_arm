@@ -8,11 +8,11 @@ class RoverTeleop(Node):
         super().__init__('rover_teleop_node')
 
         # En son gonderilecek komutlari burada saklayacagiz
-        # [SolTeker, SagTeker, Omuz, Dirsek, Bilek, Kiskac, Yedek]
-        self.last_commands = [0.0] * 7
+        # [0:SolTeker, 1:SagTeker, 2:Omuz, 3:Dirsek, 4:Bilek, 5:Kiskac, 6:YeniMotor1, 7:YeniMotor2, 8:Yedek]
+        # Toplam kapasiteyi 9'a cikardik!
+        self.last_commands = [0.0] * 9
 
         # 1. GİRİŞ: Joystick'i dinle (/joy konusuna abone ol)
-        # ROS'un "joy" paketi joystick verisini buraya atacak.
         self.subscription = self.create_subscription(
             Joy,
             'joy',
@@ -26,24 +26,18 @@ class RoverTeleop(Node):
             10)
 
         # --- TIMER ---
-        # Joystick'e dokunmasan bile surucunun baglantiyi koparmamasi icin
-        # saniyede 10 kere (0.1s) son komutu tekrar tekrar gonderiyoruz.
         self.timer = self.create_timer(0.1, self.timer_callback)
 
-        self.get_logger().info("OPERATOR HAZIR! Joystick verisi bekleniyor...")
+        self.get_logger().info("OPERATOR HAZIR! 3. Sürücü Aktif. Joystick verisi bekleniyor...")
 
     def joy_callback(self, msg):
-        # Bu fonksiyon, Joystick'e her dokunduğunda otomatik çalışır.
-
-        # --- A. Boş bir emir listesi oluştur (7 motor için) ---
+        # --- A. Boş bir emir listesi oluştur (9 motor için) ---
         emirler = Float32MultiArray()
-        # [SolTeker, SagTeker, Omuz, Dirsek, Bilek, Kıskaç, Yedek]
-        emirler.data = [0.0] * 7 
+        emirler.data = [0.0] * 9 
 
         # --- B. Joystick Tuşlarını Motora Çevir ---
 
         # 1. SÜRÜŞ (Joystick Eksenleri)
-        # Genelde Sol Analog (Axis 1: İleri/Geri, Axis 0: Sağ/Sol)
         axis_ileri = msg.axes[1] 
         axis_donus = msg.axes[0] 
         
@@ -51,46 +45,49 @@ class RoverTeleop(Node):
         if abs(axis_ileri) < 0.1: axis_ileri = 0.0
         if abs(axis_donus) < 0.1: axis_donus = 0.0
 
-        # Tank Sürüşü Mantığı (Basitçe)
+        # Tank Sürüşü Mantığı
         emirler.data[0] = (axis_ileri * 15000.0)   # Sol Teker
         emirler.data[1] = (axis_ileri * 15000.0)   # Sağ Teker
-        # (Dönüş mantığını şimdilik basit tuttum, sonra geliştiririz)
 
         # 2. ROBOT KOL (Butonlar)
-        # NOT: Buton numaraları Joystick modeline göre değişebilir!
-        # Deneyerek bulacağız: buttons[0] genelde "X" veya "A" tuşudur.
         
-        # Omuz Motoru (Buton 0 ve 1)
-        if msg.buttons[0] == 1:   
+        # Omuz Motoru (Buton 1 ve 2) //MOTOR2
+        if msg.buttons[1] == 1:   
             emirler.data[2] = 34000.0
-        elif msg.buttons[1] == 1: 
+        elif msg.buttons[2] == 1: 
             emirler.data[2] = -34000.0
         
-        # Dirsek Motoru (Buton 2 ve 3)
-        if msg.buttons[2] == 1:
+        # Dirsek Motoru (Buton 3 ve 4) //MOTOR3
+        if msg.buttons[3] == 1:
             emirler.data[3] = 20000.0
-        elif msg.buttons[3] == 1:
+        elif msg.buttons[4] == 1:
             emirler.data[3] = -20000.0
 
-        # Bilek Motoru (Buton 4 ve 5)
-        if msg.buttons[4] == 1:
+        # Bilek Motoru (Buton 5 ve 6) //MOTOR4
+        if msg.buttons[5] == 1:
             emirler.data[4] = 35000.0
-        elif msg.buttons[5] == 1:
+        elif msg.buttons[6] == 1:
             emirler.data[4] = -34000.0
 
-        # Kıskaç (Buton 6 ve 7)
-        if msg.buttons[6] == 1:
+        # Kıskaç (Buton 7 ve 8) //MOTOR5
+        if msg.buttons[7] == 1:
             emirler.data[5] = -30000.0
-        elif msg.buttons[7] == 1:
+        elif msg.buttons[8] == 1:
             emirler.data[5] = 30000.0
+            
+        # --- YENİ EKLENEN KART (130 Adresi) --- //MOTOR6 
+        # M2 kanalına bağlı 6. indeks çalışmıyor, 7. indeksle çalışıyor 
+        if msg.buttons[9] == 1:
+            emirler.data[7] = -30000.0
+        elif msg.buttons[10] == 1:
+            emirler.data[7] = 30000.0
 
         # Hafizayi güncelle.
         self.last_commands = emirler.data
-        # --- C. Listeyi Yayınla (Kargoyu Gönder) ---
+        
+        # --- C. Listeyi Yayınla ---
         self.publisher_.publish(emirler)
     
-    # Saniyede 10 kere calisir ve son durumu Driver'a bildirir.
-    # Bu sayede Driver'in Watchdog'u (Güvenlik kilidi) devreye girmez.
     def timer_callback(self):
         msg = Float32MultiArray()
         msg.data = self.last_commands
@@ -105,4 +102,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
