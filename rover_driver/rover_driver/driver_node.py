@@ -5,7 +5,6 @@ from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 from .roboclaw_3 import Roboclaw
 import time
-import serial
 
 class RoverDriver(Node):
     def __init__(self):
@@ -18,7 +17,8 @@ class RoverDriver(Node):
         # SÜRÜCÜ ADRESLERİ
         self.ADDR_128 = 0x80  
         self.ADDR_129 = 0x81 
-        self.ADDR_130 = 0x82  # YENİ EKLENEN KART
+        self.ADDR_130 = 0x82  
+        self.ADDR_131 = 0x83  # YENİ EKLENEN GRİPPER KARTI
 
         self.get_logger().info(f"Port: {self.port} | Baud: {self.baudrate}")
 
@@ -32,56 +32,50 @@ class RoverDriver(Node):
             self.listener_callback,
             10)
 
-        # --- DEGISKENLER (Kapasite 9'a Çıkarıldı) ---
+        # --- DEGISKENLER ---
+        # İndeks Haritası (Teleop ile Birebir Aynı):
+        # 0:Bos, 1:Bos, 2:M1, 3:M2, 4:M3, 5:M4, 6:M5, 7:M6, 8:Gripper
         self.targets = [0.0] * 9
         self.currents = [0.0] * 9
         self.RAMP_STEP = 2000.0
         self.last_msg_time = time.time()
         self.TIMEOUT_SEC = 0.5
 
-        # FREKANSI DUSURUYORUZ (USB Rahatlasin diye 0.1s)
         self.timer = self.create_timer(0.1, self.control_loop)
-        self.get_logger().info("Driver Started (Robust Mode - 3 Controllers)")
+        self.get_logger().info("Driver Started (4 Controllers Aktif)")
 
-    # Baglantiyi guvenli sekilde acar/yeniler
     def connect_roboclaw(self):
         try:
-            # Eger eski baglanti varsa kapat (_port hatasi korumasi)
             if hasattr(self, 'rc'):
                 if hasattr(self.rc, '_port') and self.rc._port is not None:
                     if self.rc._port.is_open:
                         self.rc._port.close()
-            
             time.sleep(0.5)
-            
             self.rc = Roboclaw(self.port, self.baudrate)
             if self.rc.Open():
                 self.get_logger().info("✅ Roboclaw CONNECTED/RECONNECTED!")
                 return True
             else:
-                self.get_logger().error("❌ Connection Failed! (Kabloyu veya chmod 666 iznini kontrol et)")
+                self.get_logger().error("❌ Connection Failed! (Kabloyu kontrol et)")
                 return False
         except Exception as e:
             self.get_logger().error(f"❌ Connection Error: {e}")
             return False
 
     def listener_callback(self, msg):
-        # Esnek okuma: Gelen dizideki eleman sayısı kadar oku
-        if len(msg.data) > 0:
-            for i in range(min(len(msg.data), len(self.targets))):
+        if len(msg.data) >= 9:
+            for i in range(9):
                 self.targets[i] = msg.data[i]
             self.last_msg_time = time.time()
 
     def control_loop(self):
-        # --- WATCHDOG ---
+        # --- WATCHDOG (Baglanti koparsa durdur) ---
         elapsed_time = time.time() - self.last_msg_time
         if elapsed_time > self.TIMEOUT_SEC:
             self.targets = [0.0] * 9
-            if int(elapsed_time) % 2 == 0: 
-                self.get_logger().warn(f"Signal Lost ({elapsed_time:.1f}s)", throttle_duration_sec=2.0)
 
-        # --- RAMPALAMA (Tüm Kol Motorları İçin: İndeks 2'den 7'ye kadar) ---
-        for i in range(2, 8):
+        # --- RAMPALAMA (Ani hareketleri yumuşat) ---
+        for i in range(2, 9):
             target = self.targets[i]
             current = self.currents[i]
             error = target - current
@@ -92,46 +86,38 @@ class RoverDriver(Node):
                 if error > 0: self.currents[i] += self.RAMP_STEP
                 else: self.currents[i] -= self.RAMP_STEP
 
-        # --- MOTORLARI SUR (TRY-EXCEPT ILE KORUMALI) ---
+        # --- MOTORLARI SUR ---
         try:
             ROBOCLAW_MAX = 32767
             
-            # 1. Kart (129)
-            val_omuz = int(self.currents[2])
-            val_kiskac = int(self.currents[5])
-            val_omuz = max(min(val_omuz, ROBOCLAW_MAX), -ROBOCLAW_MAX)
-            val_kiskac = max(min(val_kiskac, ROBOCLAW_MAX), -ROBOCLAW_MAX)
+            # Güvenli Sınırlandırma (Değerleri al ve Max limiti aşmasını engelle)
+            v_m1 = max(min(int(self.currents[2]), ROBOCLAW_MAX), -ROBOCLAW_MAX)
+            v_m2 = max(min(int(self.currents[3]), ROBOCLAW_MAX), -ROBOCLAW_MAX)
+            v_m3 = max(min(int(self.currents[4]), ROBOCLAW_MAX), -ROBOCLAW_MAX)
+            v_m4 = max(min(int(self.currents[5]), ROBOCLAW_MAX), -ROBOCLAW_MAX)
+            v_m5 = max(min(int(self.currents[6]), ROBOCLAW_MAX), -ROBOCLAW_MAX)
+            v_m6 = max(min(int(self.currents[7]), ROBOCLAW_MAX), -ROBOCLAW_MAX)
+            v_grip = max(min(int(self.currents[8]), ROBOCLAW_MAX), -ROBOCLAW_MAX)
             
-            self.rc.DutyM1M2(self.ADDR_129, val_omuz, val_kiskac)
+            # --- YENİ BAĞLANTI HARİTASI (WhatsApp'tan gelen listeye göre) ---
             
-            time.sleep(0.02) 
+            # 128 -> M1: 4. Motor | M2: 1. Motor
+            self.rc.DutyM1M2(self.ADDR_128, v_m4, v_m1)
+            time.sleep(0.01) 
 
-            # 2. Kart (128)
-            val_bilek = int(self.currents[4])
-            val_dirsek = int(self.currents[3])
-            val_bilek = max(min(val_bilek, ROBOCLAW_MAX), -ROBOCLAW_MAX)
-            val_dirsek = max(min(val_dirsek, ROBOCLAW_MAX), -ROBOCLAW_MAX)
+            # 129 -> M1: 2. Motor | M2: 3. Motor
+            self.rc.DutyM1M2(self.ADDR_129, v_m2, v_m3)
+            time.sleep(0.01)
 
-            self.rc.DutyM1M2(self.ADDR_128, val_bilek, val_dirsek)
-            
-            time.sleep(0.02)
+            # 130 -> M1: 5. Motor | M2: 6. Motor
+            self.rc.DutyM1M2(self.ADDR_130, v_m5, v_m6)
+            time.sleep(0.01)
 
-            # 3. Kart (130 - YENİ EKLENEN)
-            val_yeni1 = int(self.currents[6]) # şuan boşta
-            val_yeni2 = int(self.currents[7])
-            val_yeni1 = max(min(val_yeni1, ROBOCLAW_MAX), -ROBOCLAW_MAX)
-            val_yeni2 = max(min(val_yeni2, ROBOCLAW_MAX), -ROBOCLAW_MAX)
-
-            # --- AJAN KOD (Bunu Ekle) ---
-            if abs(val_yeni1) > 1000:
-                self.get_logger().info(f"🚀 130 ADRESİNE GÜÇ GİDİYOR: {val_yeni1}")
-
-            self.rc.DutyM1M2(self.ADDR_130, val_yeni1, val_yeni2)
+            # 131 -> M1: Gripper  | M2: Bos
+            self.rc.DutyM1M2(self.ADDR_131, v_grip, 0)
 
         except Exception as e:
-            # HATA OLURSA (-32 Failed vb.) BURAYA DUSER
             self.get_logger().error(f"⚠️ USB ERROR: {e}. Trying to Reconnect...")
-            # Baglantiyi yenile
             self.connect_roboclaw()
 
     def stop_all(self):
@@ -141,6 +127,8 @@ class RoverDriver(Node):
             self.rc.DutyM1M2(self.ADDR_129, 0, 0)
             time.sleep(0.02)
             self.rc.DutyM1M2(self.ADDR_130, 0, 0)
+            time.sleep(0.02)
+            self.rc.DutyM1M2(self.ADDR_131, 0, 0)
         except:
             pass
 
